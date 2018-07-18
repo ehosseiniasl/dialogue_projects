@@ -111,15 +111,16 @@ class SelfAttention_transformer_v2(nn.Module):
         attention = input_q.bmm(input_k.transpose(2, 1)).div(np.sqrt(self.dk))
         scores = attention.sum(dim=2)
         attention = F.softmax(attention, dim=2)
-        scores = F.softmax(scores, dim=1)
         max_len = max(lens)
         for i, l in enumerate(lens):
             if l < max_len:
                 scores.data[i, l:] = -np.inf
+        scores = F.softmax(scores, dim=1)
         # input_selfatt = attention.bmm(input_v)
-        input_selfatt = scores.unsqueeze(2).expand_as(input_v).sum(1)
+        input_selfatt = scores.unsqueeze(2).expand_as(inp).mul(inp).sum(1)
         #context = self.layer_norm(input_v + input_selfatt).sum(dim=1).div(2*seq_len)
-        context = self.layer_norm(input_selfatt).sum(dim=1).div(seq_len)
+        #context = self.layer_norm(input_selfatt).sum(dim=1).div(seq_len)
+        context = input_selfatt
         return context
 
 
