@@ -8,7 +8,7 @@ from utils import load_dataset, load_model
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('dsave', help='save location of model')
+    parser.add_argument('--dsave', help='save location of model')
     parser.add_argument('--split', help='split to evaluate on', default='dev')
     parser.add_argument('--gpu', type=int, help='gpu to use', default=None)
     parser.add_argument('--fout', help='optional save file to store the predictions')
