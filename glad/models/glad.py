@@ -83,7 +83,7 @@ class SelfAttention_transformer_v1(nn.Module):
         attention = F.softmax(input_q.bmm(input_k.transpose(2, 1)), dim=1).div(np.sqrt(self.dk))
         #ipdb.set_trace()
         input_selfatt = attention.bmm(input_v)
-        context = self.layer_norm(input_v + input_selfatt).sum(dim=1)
+        context = self.layer_norm(input_v + input_selfatt).sum(dim=1).div(2*seq_len)
         return context
 
 
@@ -113,7 +113,7 @@ class SelfAttention_transformer_v2(nn.Module):
         #ipdb.set_trace()
         scores = F.softmax(scores, dim=1)
         input_selfatt = attention.bmm(input_v)
-        context = self.layer_norm(input_v + input_selfatt).sum(dim=1)
+        context = self.layer_norm(input_v + input_selfatt).sum(dim=1).div(2*seq_len)
         return context
 
 
@@ -136,6 +136,7 @@ class SelfAttention(nn.Module):
         for i, l in enumerate(lens):
             if l < max_len:
                 scores.data[i, l:] = -np.inf
+        #ipdb.set_trace()
         scores = F.softmax(scores, dim=1)
         context = scores.unsqueeze(2).expand_as(inp).mul(inp).sum(1)
         return context
@@ -169,6 +170,7 @@ class GLADEncoder(nn.Module):
         global_h = run_rnn(self.global_rnn, x, x_len)
         h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
         c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        #ipdb.set_trace()
         return h, c
 
 
