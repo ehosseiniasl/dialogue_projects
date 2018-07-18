@@ -107,17 +107,17 @@ class SelfAttention_transformer_v2(nn.Module):
         input_v = self.value_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dv)
         attention = input_q.bmm(input_k.transpose(2, 1)).div(np.sqrt(self.dk))
         scores = attention.sum(dim=2)
+        attention = F.softmax(attention, dim=2)
+        scores = F.softmax(scores, dim=1)
         max_len = max(lens)
         for i, l in enumerate(lens):
             if l < max_len:
                 scores.data[i, l:] = -np.inf
-        #ipdb.set_trace()
-        scores = F.softmax(scores, dim=1)
-        input_selfatt = attention.bmm(input_v)
+        # input_selfatt = attention.bmm(input_v)
+        input_selfatt = scores.unsqueeze(2).expand_as(input_v).sum(1)
         #context = self.layer_norm(input_v + input_selfatt).sum(dim=1).div(2*seq_len)
         context = self.layer_norm(input_selfatt).sum(dim=1).div(seq_len)
         return context
-
 
 
 class SelfAttention(nn.Module):
@@ -145,6 +145,134 @@ class SelfAttention(nn.Module):
 
 
 class GLADEncoder(nn.Module):
+    """
+    the GLAD encoder described in https://arxiv.org/abs/1805.09655.
+    """
+
+    def __init__(self, din, dhid, slots, dropout=None):
+        super().__init__()
+        self.dropout = dropout or {}
+        self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
+        self.global_selfattn = SelfAttention(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
+        for s in slots:
+            setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
+            setattr(self, '{}_selfattn'.format(s), SelfAttention(din, dropout=self.dropout.get('selfattn', 0.)))
+        self.slots = slots
+        self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
+        nn.init.uniform_(self.beta_raw, -0.01, 0.01)
+
+    def beta(self, slot):
+        return F.sigmoid(self.beta_raw[self.slots.index(slot)])
+
+    def forward(self, x, x_len, slot, default_dropout=0.2):
+        local_rnn = getattr(self, '{}_rnn'.format(slot))
+        local_selfattn = getattr(self, '{}_selfattn'.format(slot))
+        beta = self.beta(slot)
+        local_h = run_rnn(local_rnn, x, x_len)
+        global_h = run_rnn(self.global_rnn, x, x_len)
+        h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        #ipdb.set_trace()
+        return h, c
+
+
+class GLADEncoder_global_v1(nn.Module):
+    """
+    the GLAD encoder described in https://arxiv.org/abs/1805.09655.
+    """
+
+    def __init__(self, din, dhid, slots, dropout=None):
+        super().__init__()
+        self.dropout = dropout or {}
+        self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
+        self.global_selfattn = SelfAttention_transformer_v1(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
+        for s in slots:
+            setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
+            setattr(self, '{}_selfattn'.format(s), SelfAttention(din, dropout=self.dropout.get('selfattn', 0.)))
+        self.slots = slots
+        self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
+        nn.init.uniform_(self.beta_raw, -0.01, 0.01)
+
+    def beta(self, slot):
+        return F.sigmoid(self.beta_raw[self.slots.index(slot)])
+
+    def forward(self, x, x_len, slot, default_dropout=0.2):
+        local_rnn = getattr(self, '{}_rnn'.format(slot))
+        local_selfattn = getattr(self, '{}_selfattn'.format(slot))
+        beta = self.beta(slot)
+        local_h = run_rnn(local_rnn, x, x_len)
+        global_h = run_rnn(self.global_rnn, x, x_len)
+        h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        #ipdb.set_trace()
+        return h, c
+
+
+class GLADEncoder_global_v2(nn.Module):
+    """
+    the GLAD encoder described in https://arxiv.org/abs/1805.09655.
+    """
+
+    def __init__(self, din, dhid, slots, dropout=None):
+        super().__init__()
+        self.dropout = dropout or {}
+        self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
+        self.global_selfattn = SelfAttention_transformer_v2(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
+        for s in slots:
+            setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
+            setattr(self, '{}_selfattn'.format(s), SelfAttention(din, dropout=self.dropout.get('selfattn', 0.)))
+        self.slots = slots
+        self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
+        nn.init.uniform_(self.beta_raw, -0.01, 0.01)
+
+    def beta(self, slot):
+        return F.sigmoid(self.beta_raw[self.slots.index(slot)])
+
+    def forward(self, x, x_len, slot, default_dropout=0.2):
+        local_rnn = getattr(self, '{}_rnn'.format(slot))
+        local_selfattn = getattr(self, '{}_selfattn'.format(slot))
+        beta = self.beta(slot)
+        local_h = run_rnn(local_rnn, x, x_len)
+        global_h = run_rnn(self.global_rnn, x, x_len)
+        h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        #ipdb.set_trace()
+        return h, c
+
+
+class GLADEncoder_global_local_v1(nn.Module):
+    """
+    the GLAD encoder described in https://arxiv.org/abs/1805.09655.
+    """
+
+    def __init__(self, din, dhid, slots, dropout=None):
+        super().__init__()
+        self.dropout = dropout or {}
+        self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
+        self.global_selfattn = SelfAttention_transformer_v1(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
+        for s in slots:
+            setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
+            setattr(self, '{}_selfattn'.format(s), SelfAttention_transformer_v1(din, dropout=self.dropout.get('selfattn', 0.)))
+        self.slots = slots
+        self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
+        nn.init.uniform_(self.beta_raw, -0.01, 0.01)
+
+    def beta(self, slot):
+        return F.sigmoid(self.beta_raw[self.slots.index(slot)])
+
+    def forward(self, x, x_len, slot, default_dropout=0.2):
+        local_rnn = getattr(self, '{}_rnn'.format(slot))
+        local_selfattn = getattr(self, '{}_selfattn'.format(slot))
+        beta = self.beta(slot)
+        local_h = run_rnn(local_rnn, x, x_len)
+        global_h = run_rnn(self.global_rnn, x, x_len)
+        h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        #ipdb.set_trace()
+        return h, c
+
+
+class GLADEncoder_global_local_v2(nn.Module):
     """
     the GLAD encoder described in https://arxiv.org/abs/1805.09655.
     """
