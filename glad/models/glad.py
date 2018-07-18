@@ -9,7 +9,7 @@ import re
 import json
 from collections import defaultdict
 from pprint import pformat
-
+import ipdb
 
 def pad(seqs, emb, device, pad=0):
     lens = [len(s) for s in seqs]
@@ -65,24 +65,25 @@ class FixedEmbedding(nn.Embedding):
 
 class SelfAttention_transformer(nn.Module):
 
-    def __init__(self, dhid, dk, dv, dropout=0.):
+    def __init__(self, dhid, dropout=0.):
         super().__init__()
-        self.dk = dk
-        self.dv = dv
-        self.query_layer = nn.Linear(dhid, dk)
-        self.key_layer = nn.Linear(dhid, dk)
-        self.value_layer = nn.Linear(dhid, dv)
+        self.dk = dhid
+        self.dv = dhid
+        self.query_layer = nn.Linear(dhid, self.dk)
+        self.key_layer = nn.Linear(dhid, self.dk)
+        self.value_layer = nn.Linear(dhid, self.dv)
         self.dropout = nn.Dropout(dropout)
-        self.layer_norm = nn.LayerNorm()
+        self.layer_norm = nn.LayerNorm(self.dv)
 
     def forward(self, inp, lens):
         batch, seq_len, d_feat = inp.size()
         input_q = self.query_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dk)
         input_k = self.key_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dk)
         input_v = self.value_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dv)
-        attention = F.softmax(input_q.bmm(input_k.transpose(2, 1)), dim=1)
+        attention = F.softmax(input_q.bmm(input_k.transpose(2, 1)), dim=1).div(np.sqrt(self.dk))
+        #ipdb.set_trace()
         input_selfatt = attention.bmm(input_v)
-        context = self.layer_norm(input_v + input_selfatt).sum(dim=2)
+        context = self.layer_norm(input_v + input_selfatt).sum(dim=1)
         return context
 
 
@@ -119,10 +120,10 @@ class GLADEncoder(nn.Module):
         super().__init__()
         self.dropout = dropout or {}
         self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
-        self.global_selfattn = SelfAttention(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
+        self.global_selfattn = SelfAttention_transformer(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
         for s in slots:
             setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
-            setattr(self, '{}_selfattn'.format(s), SelfAttention(din, dropout=self.dropout.get('selfattn', 0.)))
+            setattr(self, '{}_selfattn'.format(s), SelfAttention_transformer(din, dropout=self.dropout.get('selfattn', 0.)))
         self.slots = slots
         self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
         nn.init.uniform_(self.beta_raw, -0.01, 0.01)
@@ -187,7 +188,7 @@ class Model(nn.Module):
             H_utt, c_utt = self.utt_encoder(utterance, utterance_len, slot=s)
             _, C_acts = list(zip(*[self.act_encoder(a, a_len, slot=s) for a, a_len in acts]))
             _, C_vals = self.ont_encoder(ontology[s][0], ontology[s][1], slot=s)
-
+            
             # compute the utterance score
             y_utts = []
             q_utts = []
