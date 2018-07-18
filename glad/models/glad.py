@@ -63,7 +63,7 @@ class FixedEmbedding(nn.Embedding):
         return F.dropout(out, self.dropout, self.training)
 
 
-class SelfAttention_transformer(nn.Module):
+class SelfAttention_transformer_v1(nn.Module):
 
     def __init__(self, dhid, dropout=0.):
         super().__init__()
@@ -82,6 +82,36 @@ class SelfAttention_transformer(nn.Module):
         input_v = self.value_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dv)
         attention = F.softmax(input_q.bmm(input_k.transpose(2, 1)), dim=1).div(np.sqrt(self.dk))
         #ipdb.set_trace()
+        input_selfatt = attention.bmm(input_v)
+        context = self.layer_norm(input_v + input_selfatt).sum(dim=1)
+        return context
+
+
+class SelfAttention_transformer_v2(nn.Module):
+
+    def __init__(self, dhid, dropout=0.):
+        super().__init__()
+        self.dk = dhid
+        self.dv = dhid
+        self.query_layer = nn.Linear(dhid, self.dk)
+        self.key_layer = nn.Linear(dhid, self.dk)
+        self.value_layer = nn.Linear(dhid, self.dv)
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(self.dv)
+
+    def forward(self, inp, lens):
+        batch, seq_len, d_feat = inp.size()
+        input_q = self.query_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dk)
+        input_k = self.key_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dk)
+        input_v = self.value_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dv)
+        attention = input_q.bmm(input_k.transpose(2, 1)).div(np.sqrt(self.dk))
+        scores = attention.sum(dim=2)
+        max_len = max(lens)
+        for i, l in enumerate(lens):
+            if l < max_len:
+                scores.data[i, l:] = -np.inf
+        #ipdb.set_trace()
+        scores = F.softmax(scores, dim=1)
         input_selfatt = attention.bmm(input_v)
         context = self.layer_norm(input_v + input_selfatt).sum(dim=1)
         return context
@@ -120,10 +150,10 @@ class GLADEncoder(nn.Module):
         super().__init__()
         self.dropout = dropout or {}
         self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
-        self.global_selfattn = SelfAttention_transformer(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
+        self.global_selfattn = SelfAttention_transformer_v2(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
         for s in slots:
             setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
-            setattr(self, '{}_selfattn'.format(s), SelfAttention_transformer(din, dropout=self.dropout.get('selfattn', 0.)))
+            setattr(self, '{}_selfattn'.format(s), SelfAttention(din, dropout=self.dropout.get('selfattn', 0.)))
         self.slots = slots
         self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
         nn.init.uniform_(self.beta_raw, -0.01, 0.01)
