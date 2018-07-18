@@ -7,8 +7,7 @@ import numpy as np
 from pprint import pprint
 import torch
 from random import seed
-from models import glad
-MODELS = ['glad', 'glad_global_v1', 'glad_global_local_v1', 'glad_global_v2', 'glad_global_local_v2']
+from models.glad import GLAD_ENCODERS
 
 
 def run(args):
@@ -42,8 +41,8 @@ def run(args):
 def get_args():
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
     parser.add_argument('--dexp', help='root experiment folder', default='exp')
-    # parser.add_argument('--model', help='which model to use', default='glad', choices=get_models())
-    parser.add_argument('--model', help='which model to use', default='glad', choices=MODELS)
+    parser.add_argument('--model', help='which model to use', default='glad', choices=get_models())
+    parser.add_argument('--encoder', help='which encoder to use', default='SelfAttention', choices=GLAD_ENCODERS)
     parser.add_argument('--epoch', help='max epoch to run for', default=50, type=int)
     parser.add_argument('--demb', help='word embedding size', default=400, type=int)
     parser.add_argument('--dhid', help='hidden state size', default=200, type=int)

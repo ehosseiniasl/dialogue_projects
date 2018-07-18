@@ -11,6 +11,9 @@ from collections import defaultdict
 from pprint import pformat
 import ipdb
 
+GLAD_ENCODERS = ['GLADEncoder', 'GLADEncoder_global_v1', 'GLADEncoder_global_v2',
+                 'GLADEncoder_global_local_v1', 'GLADEncoder_global_local_v2']
+
 def pad(seqs, emb, device, pad=0):
     lens = [len(s) for s in seqs]
     max_len = max(lens)
@@ -316,10 +319,11 @@ class Model(nn.Module):
         self.vocab = vocab
         self.ontology = ontology
         self.emb_fixed = FixedEmbedding(len(vocab), args.demb, dropout=args.dropout.get('emb', 0.2))
+        self.encoder = globals().get(args.encoder)
 
-        self.utt_encoder = GLADEncoder(args.demb, args.dhid, self.ontology.slots, dropout=args.dropout)
-        self.act_encoder = GLADEncoder(args.demb, args.dhid, self.ontology.slots, dropout=args.dropout)
-        self.ont_encoder = GLADEncoder(args.demb, args.dhid, self.ontology.slots, dropout=args.dropout)
+        self.utt_encoder = self.encoder(args.demb, args.dhid, self.ontology.slots, dropout=args.dropout)
+        self.act_encoder = self.encoder(args.demb, args.dhid, self.ontology.slots, dropout=args.dropout)
+        self.ont_encoder = self.encoder(args.demb, args.dhid, self.ontology.slots, dropout=args.dropout)
         self.utt_scorer = nn.Linear(2 * args.dhid, 1)
         self.score_weight = nn.Parameter(torch.Tensor([0.5]))
 
