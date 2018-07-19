@@ -4,6 +4,7 @@ import logging
 from argparse import ArgumentParser, Namespace
 from pprint import pprint
 from utils import load_dataset, load_model
+from models.glad import GLAD_ENCODERS
 
 
 if __name__ == '__main__':
@@ -12,6 +13,7 @@ if __name__ == '__main__':
     parser.add_argument('--split', help='split to evaluate on', default='dev')
     parser.add_argument('--gpu', type=int, help='gpu to use', default=None)
     parser.add_argument('--fout', help='optional save file to store the predictions')
+    parser.add_argument('--encoder', help='which encoder to use', default='GLADEncoder', choices=GLAD_ENCODERS)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -19,6 +21,8 @@ if __name__ == '__main__':
     with open(os.path.join(args.dsave, 'config.json')) as f:
         args_save = Namespace(**json.load(f))
         args_save.gpu = args.gpu
+        if not hasattr(args_save, 'encoder'):
+            args_save.encoder = args.encoder
     pprint(args_save)
 
     dataset, ontology, vocab, Eword = load_dataset()
