@@ -25,11 +25,14 @@ def run(args):
     model.load_emb(Eword)
 
     model = model.to(model.device)
-    if not args.test:
+    if args.resume:
+        logging.info('Load best model')
+        model.load_best_save(directory=args.resume)
         logging.info('Starting train')
         model.run_train(dataset['train'], dataset['dev'], args)
-    if args.resume:
-        model.load_best_save(directory=args.resume)
+    elif not args.test:
+        logging.info('Starting train')
+        model.run_train(dataset['train'], dataset['dev'], args)
     else:
         model.load_best_save(directory=args.dout)
     model = model.to(model.device)
