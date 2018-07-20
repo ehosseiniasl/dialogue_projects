@@ -202,8 +202,8 @@ class GLADEncoder_global_no_rnn_v1(nn.Module):
         return F.sigmoid(self.beta_raw[self.slots.index(slot)])
 
     def forward(self, x, x_len, slot, default_dropout=0.2):
-        local_rnn = getattr(self, '{}_rnn'.format(slot))
-        local_selfattn = getattr(self, '{}_selfattn'.format(slot))
+        #local_rnn = getattr(self, '{}_rnn'.format(slot))
+        #local_selfattn = getattr(self, '{}_selfattn'.format(slot))
         beta = self.beta(slot)
         # local_h = x
         global_h = x
@@ -212,7 +212,7 @@ class GLADEncoder_global_no_rnn_v1(nn.Module):
         # h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
         h = F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
         # c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
-        c = F.dropout(self.global_selfattn(h. x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        c = F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
         #ipdb.set_trace()
         return h, c
 
