@@ -112,9 +112,8 @@ class SelfAttention_transformer_condition_v1(nn.Module):
         # input_k = self.key_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dk)
         # input_v = self.value_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dv)
         # attention = F.softmax(input_q.bmm(input_k.transpose(2, 1)), dim=1).div(np.sqrt(self.dk))
-        attention = F.softmax(cond.mul(inp))
-        #ipdb.set_trace()
-        input_selfatt = attention.bmm(inp)
+        attention = F.softmax(cond.unsqueeze(0).expand_as(inp).bmm(inp.transpose(2, 1))[:, 0, :], dim=1)
+        input_selfatt = attention.unsqueeze(1).bmm(inp)
         context = input_selfatt
         #context = self.layer_norm(input_v + input_selfatt).sum(dim=1).div(2*seq_len)
         # context = self.layer_norm(input_selfatt).sum(dim=1).div(seq_len)
@@ -230,7 +229,7 @@ class GLADEncoder_global_no_rnn_v1(nn.Module):
     def beta(self, slot):
         return F.sigmoid(self.beta_raw[self.slots.index(slot)])
 
-    def forward(self, x, x_len, slot, default_dropout=0.2):
+    def forward(self, x, x_len, slot, slot_emb=None, default_dropout=0.2):
         #local_rnn = getattr(self, '{}_rnn'.format(slot))
         #local_selfattn = getattr(self, '{}_selfattn'.format(slot))
         beta = self.beta(slot)
@@ -266,7 +265,7 @@ class GLADEncoder_global_no_rnn_conditioned_v1(nn.Module):
     def beta(self, slot):
         return F.sigmoid(self.beta_raw[self.slots.index(slot)])
 
-    def forward(self, x, x_len, slot, default_dropout=0.2):
+    def forward(self, x, x_len, slot, slot_emb, default_dropout=0.2):
         #local_rnn = getattr(self, '{}_rnn'.format(slot))
         #local_selfattn = getattr(self, '{}_selfattn'.format(slot))
         beta = self.beta(slot)
@@ -277,7 +276,7 @@ class GLADEncoder_global_no_rnn_conditioned_v1(nn.Module):
         # h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
         h = F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
         # c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
-        c = F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        c = F.dropout(self.global_selfattn(h, x_len, slot_emb), self.dropout.get('global', default_dropout), self.training) * (1-beta)
         #ipdb.set_trace()
         return h, c
 
@@ -557,18 +556,24 @@ class Model(nn.Module):
         utterance, utterance_len = pad([e.num['transcript'] for e in batch], self.emb_fixed, self.device, pad=eos)
         acts = [pad(e.num['system_acts'], self.emb_fixed, self.device, pad=eos) for e in batch]
         ontology = {s: pad(v, self.emb_fixed, self.device, pad=eos) for s, v in self.ontology.num.items()}
-
         ys = {}
         for s in self.ontology.slots:
             # for each slot, compute the scores for each value
-            H_utt, c_utt = self.utt_encoder(utterance, utterance_len, slot=s)
-            _, C_acts = list(zip(*[self.act_encoder(a, a_len, slot=s) for a, a_len in acts]))
-            _, C_vals = self.ont_encoder(ontology[s][0], ontology[s][1], slot=s)
             
+            s_words = s.split()
+            s_new = s_words[0]
+            s_emb = self.emb_fixed(torch.cuda.LongTensor([self.vocab.word2index(s_new)]))
+            
+            H_utt, c_utt = self.utt_encoder(utterance, utterance_len, slot=s, slot_emb=s_emb)
+            _, C_acts = list(zip(*[self.act_encoder(a, a_len, slot=s, slot_emb=s_emb) for a, a_len in acts]))
+            _, C_vals = self.ont_encoder(ontology[s][0], ontology[s][1], slot=s, slot_emb=s_emb)
+           
             # compute the utterance score
             y_utts = []
             q_utts = []
             for c_val in C_vals:
+                if self.encoder.__name__ == 'GLADEncoder_global_no_rnn_conditioned_v1':
+                    c_val = c_val.squeeze(0)
                 q_utt, _ = attend(H_utt, c_val.unsqueeze(0).expand(len(batch), *c_val.size()), lens=utterance_len)
                 q_utts.append(q_utt)
             y_utts = self.utt_scorer(torch.stack(q_utts, dim=1)).squeeze(2)
@@ -576,9 +581,15 @@ class Model(nn.Module):
             # compute the previous action score
             q_acts = []
             for i, C_act in enumerate(C_acts):
+                #if self.encoder.__name__ == 'GLADEncoder_global_no_rnn_conditioned_v1':
+                #    C_act = C_act.unsqueeze(0)
                 q_act, _ = attend(C_act.unsqueeze(0), c_utt[i].unsqueeze(0), lens=[C_act.size(0)])
                 q_acts.append(q_act)
-            y_acts = torch.cat(q_acts, dim=0).mm(C_vals.transpose(0, 1))
+            
+            if self.encoder.__name__ == 'GLADEncoder_global_no_rnn_conditioned_v1':
+                y_acts = torch.cat(q_acts, dim=0).squeeze().mm(C_vals.squeeze().transpose(0, 1))
+            else:
+                y_acts = torch.cat(q_acts, dim=0).mm(C_vals.transpose(0, 1))
 
             # combine the scores
             ys[s] = F.sigmoid(y_utts + self.score_weight * y_acts)
