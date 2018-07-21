@@ -253,7 +253,7 @@ class GLADEncoder_global_no_rnn_conditioned_v1(nn.Module):
     def __init__(self, din, dhid, slots, dropout=None):
         super().__init__()
         self.dropout = dropout or {}
-        # self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
+        self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
         self.global_selfattn = SelfAttention_transformer_condition_v1(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
         # for s in slots:
             # setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
@@ -270,9 +270,9 @@ class GLADEncoder_global_no_rnn_conditioned_v1(nn.Module):
         #local_selfattn = getattr(self, '{}_selfattn'.format(slot))
         beta = self.beta(slot)
         # local_h = x
-        global_h = x
+        #global_h = x
         # local_h = run_rnn(local_rnn, x, x_len)
-        # global_h = run_rnn(self.global_rnn, x, x_len)
+        global_h = run_rnn(self.global_rnn, x, x_len)
         # h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
         h = F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
         # c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
