@@ -91,6 +91,31 @@ class SelfAttention_transformer_v1(nn.Module):
         input_selfatt = attention.bmm(input_v)
         #context = self.layer_norm(input_v + input_selfatt).sum(dim=1).div(2*seq_len)
         context = self.layer_norm(input_selfatt).sum(dim=1).div(seq_len)
+        return context
+
+
+class SelfAttention_transformer_v3(nn.Module):
+
+    def __init__(self, din, dhid, dropout=0.):
+        super().__init__()
+        self.dk = dhid
+        self.dv = dhid
+        self.query_layer = nn.Linear(din, self.dk)
+        self.key_layer = nn.Linear(din, self.dk)
+        self.value_layer = nn.Linear(din, self.dv)
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(self.dv)
+
+    def forward(self, inp, lens):
+        batch, seq_len, d_feat = inp.size()
+        input_q = self.query_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dk)
+        input_k = self.key_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dk)
+        input_v = self.value_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dv)
+        attention = F.softmax(input_q.bmm(input_k.transpose(2, 1)), dim=1).div(np.sqrt(self.dk))
+        #ipdb.set_trace()
+        input_selfatt = attention.bmm(input_v)
+        #context = self.layer_norm(input_v + input_selfatt).sum(dim=1).div(2*seq_len)
+        context = self.layer_norm(input_selfatt).sum(dim=1).div(seq_len)
         return input_selfatt, context
 
 
@@ -151,7 +176,7 @@ class SelfAttention_transformer_v2(nn.Module):
         #context = self.layer_norm(input_v + input_selfatt).sum(dim=1).div(2*seq_len)
         #context = self.layer_norm(input_selfatt).sum(dim=1).div(seq_len)
         # context = input_selfatt
-        return input_selfatt, context
+        return context
 
 
 class SelfAttention(nn.Module):
@@ -291,7 +316,7 @@ class GLADEncoder_global_no_rnn_conditioned_v2(nn.Module):
         super().__init__()
         self.dropout = dropout or {}
         # self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
-        self.global_rnn = SelfAttention_transformer_v1(din, dhid)
+        self.global_rnn = SelfAttention_transformer_v3(din, dhid)
         self.global_selfattn = SelfAttention_transformer_condition_v1(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
         # for s in slots:
             # setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
