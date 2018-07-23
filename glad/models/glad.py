@@ -17,6 +17,19 @@ GLAD_ENCODERS = ['GLADEncoder', 'GLADEncoder_global_v1', 'GLADEncoder_global_v2'
                  'GLADEncoder_global_local_no_rnn_v1', 'GLADEncoder_global_local_no_rnn_v2',
                  'GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2']
 
+def position_encoding_init(n_position, d_pos_vec):
+    ''' Init the sinusoid position encoding table '''
+
+    # keep dim 0 for padding token position encoding zero vector
+    position_enc = np.array([
+        [pos / np.power(10000, 2 * (j // 2) / d_pos_vec) for j in range(d_pos_vec)]
+        if pos != 0 else np.zeros(d_pos_vec) for pos in range(n_position)])
+
+    position_enc[1:, 0::2] = np.sin(position_enc[1:, 0::2]) # dim 2i
+    position_enc[1:, 1::2] = np.cos(position_enc[1:, 1::2]) # dim 2i+1
+    return torch.from_numpy(position_enc).type(torch.FloatTensor).cuda()
+
+
 def pad(seqs, emb, device, pad=0):
     lens = [len(s) for s in seqs]
     max_len = max(lens)
@@ -100,17 +113,19 @@ class SelfAttention_transformer_v3(nn.Module):
         super().__init__()
         self.dk = dhid
         self.dv = dhid
-        self.query_layer = nn.Linear(din, self.dk)
-        self.key_layer = nn.Linear(din, self.dk)
-        self.value_layer = nn.Linear(din, self.dv)
+        self.query_layer = nn.Linear(2 * din, self.dk)
+        self.key_layer = nn.Linear(2 * din, self.dk)
+        self.value_layer = nn.Linear(2 * din, self.dv)
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(self.dv)
 
     def forward(self, inp, lens):
         batch, seq_len, d_feat = inp.size()
-        input_q = self.query_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dk)
-        input_k = self.key_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dk)
-        input_v = self.value_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dv)
+        inp_pos = position_encoding_init(seq_len, d_feat)
+        inp_new = torch.cat((inp, inp_pos.unsqueeze(0).expand_as(inp)), dim=2)
+        input_q = self.query_layer(inp_new.view(-1, d_feat)).view(batch, seq_len, self.dk)
+        input_k = self.key_layer(inp_new.view(-1, d_feat)).view(batch, seq_len, self.dk)
+        input_v = self.value_layer(inp_new.view(-1, d_feat)).view(batch, seq_len, self.dv)
         attention = F.softmax(input_q.bmm(input_k.transpose(2, 1)), dim=1).div(np.sqrt(self.dk))
         #ipdb.set_trace()
         input_selfatt = attention.bmm(input_v)
