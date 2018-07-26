@@ -122,16 +122,18 @@ class SelfAttention_transformer_v3(nn.Module):
     def forward(self, inp, lens):
         batch, seq_len, d_feat = inp.size()
         inp_pos = position_encoding_init(seq_len, d_feat)
+        #inp_pos = torch.cuda.FloatTensor([[1]])
         inp_new = torch.cat((inp, inp_pos.unsqueeze(0).expand_as(inp)), dim=2)
-        input_q = self.query_layer(inp_new.view(-1, d_feat)).view(batch, seq_len, self.dk)
-        input_k = self.key_layer(inp_new.view(-1, d_feat)).view(batch, seq_len, self.dk)
-        input_v = self.value_layer(inp_new.view(-1, d_feat)).view(batch, seq_len, self.dv)
+        input_q = self.query_layer(inp_new.view(-1, 2 * d_feat)).view(batch, seq_len, self.dk)
+        input_k = self.key_layer(inp_new.view(-1, 2 * d_feat)).view(batch, seq_len, self.dk)
+        input_v = self.value_layer(inp_new.view(-1, 2 * d_feat)).view(batch, seq_len, self.dv)
         attention = F.softmax(input_q.bmm(input_k.transpose(2, 1)), dim=1).div(np.sqrt(self.dk))
         #ipdb.set_trace()
         input_selfatt = attention.bmm(input_v)
         #context = self.layer_norm(input_v + input_selfatt).sum(dim=1).div(2*seq_len)
         context = self.layer_norm(input_selfatt).sum(dim=1).div(seq_len)
         return input_selfatt, context
+
 
 
 class SelfAttention_transformer_condition_v1(nn.Module):
@@ -353,7 +355,8 @@ class GLADEncoder_global_no_rnn_conditioned_v2(nn.Module):
         # global_h = run_rnn(self.global_rnn, x, x_len)
         global_h, _ = self.global_rnn(x, x_len)
         # h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
-        h = F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        #h = F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        h = F.dropout(global_h, self.dropout.get('global', default_dropout), self.training)
         # c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
         c = F.dropout(self.global_selfattn(h, x_len, slot_emb), self.dropout.get('global', default_dropout), self.training) * (1-beta)
         #ipdb.set_trace()
@@ -642,9 +645,14 @@ class Model(nn.Module):
             s_words = s.split()
             s_new = s_words[0]
             s_emb = self.emb_fixed(torch.cuda.LongTensor([self.vocab.word2index(s_new)]))
-            H_utt, c_utt = self.utt_encoder(utterance, utterance_len, slot=s, slot_emb=s_emb)
-            _, C_acts = list(zip(*[self.act_encoder(a, a_len, slot=s, slot_emb=s_emb) for a, a_len in acts]))
-            _, C_vals = self.ont_encoder(ontology[s][0], ontology[s][1], slot=s, slot_emb=s_emb)
+            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2']:
+                H_utt, c_utt = self.utt_encoder(utterance, utterance_len, slot=s, slot_emb=s_emb)
+                _, C_acts = list(zip(*[self.act_encoder(a, a_len, slot=s, slot_emb=s_emb) for a, a_len in acts]))
+                _, C_vals = self.ont_encoder(ontology[s][0], ontology[s][1], slot=s, slot_emb=s_emb)
+            else:
+                H_utt, c_utt = self.utt_encoder(utterance, utterance_len, slot=s)
+                _, C_acts = list(zip(*[self.act_encoder(a, a_len, slot=s) for a, a_len in acts]))
+                _, C_vals = self.ont_encoder(ontology[s][0], ontology[s][1], slot=s)
            
             # compute the utterance score
             y_utts = []
