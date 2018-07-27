@@ -22,7 +22,8 @@ from allennlp.modules.elmo import Elmo, batch_to_ids
 options_file = "https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x4096_512_2048cnn_2xhighway/elmo_2x4096_512_2048cnn_2xhighway_options.json"
 weight_file = "https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x4096_512_2048cnn_2xhighway/elmo_2x4096_512_2048cnn_2xhighway_weights.hdf5"
 
-
+global emb_elmo
+emb_elmo = Elmo(options_file, weight_file, 1, dropout=0.2)
 
 def position_encoding_init(n_position, d_pos_vec):
     ''' Init the sinusoid position encoding table '''
@@ -44,15 +45,20 @@ def pad(seqs, emb, device, pad=0):
     return emb(padded.to(device)), lens
 
 
-def pad_elmo(seqs, emb, device, pad=0):
+def pad_elmo(seqs, device, pad=0):
     # lens = [len(s) for s in seqs]
     # max_len = max(lens)
     # padded = torch.LongTensor([s + (max_len-l) * [pad] for s, l in zip(seqs, lens)])
+    #ipdb.set_trace()
+    #ipdb.set_trace()
+    if len(seqs) == 0:
+        seqs = [['.']]
     lens = [len(s) for s in seqs]
     max_lens = max(lens)
     padded = [p + (max_lens-l) * ['.'] for p, l in zip(seqs, lens)]
-    embeddings = emb(batch_to_ids(padded))
-    embeddings_tensor = torch.stack(embeddings, dim=0).to(device)
+    embeddings = emb_elmo(batch_to_ids(padded))
+    #embeddings_tensor = torch.stack(embeddings['elmo_representations'][0], dim=0).to(device)
+    embeddings_tensor = embeddings['elmo_representations'][0].to(device)
     # return emb(padded.to(device)), lens
     return embeddings_tensor, lens
 
@@ -886,7 +892,7 @@ class Model_elmo(nn.Module):
         self.utt_scorer = nn.Linear(2 * args.dhid, 1)
         self.score_weight = nn.Parameter(torch.Tensor([0.5]))
 
-        self.emb_elmo = Elmo(options_file, weight_file, 1, dropout=args.dropout.get('emb', 0.2))
+        #self.emb_elmo = Elmo(options_file, weight_file, 1, dropout=args.dropout.get('emb', 0.2))
 
     @property
     def device(self):
@@ -903,11 +909,12 @@ class Model_elmo(nn.Module):
         self.emb_fixed.weight.data.copy_(new(Eword))
 
     def forward(self, batch):
+        ipdb.set_trace()
         # convert to variables and look up embeddings
         eos = self.vocab.word2index('<eos>')
-        utterance, utterance_len = pad_elmo([e.transcript for e in batch], self.emb_elmo, self.device, pad=eos)
-        acts = [pad_elmo(e.system_acts, self.emb_elmo, self.device, pad=eos) for e in batch]
-        ontology = {s: pad_elmo(v, self.emb_elmo, self.device, pad=eos) for s, v in self.ontology.num.items()}
+        utterance, utterance_len = pad_elmo([e.transcript for e in batch], self.device, pad=eos)
+        acts = [pad_elmo(e.system_acts, self.device, pad=eos) for e in batch]
+        ontology = {s: pad_elmo(v, self.device, pad=eos) for s, v in self.ontology.num.items()}
         ys = {}
         for s in self.ontology.slots:
             # for each slot, compute the scores for each value
