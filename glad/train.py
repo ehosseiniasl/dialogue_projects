@@ -45,6 +45,7 @@ def get_args():
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
     parser.add_argument('--dexp', help='root experiment folder', default='exp')
     parser.add_argument('--model', help='which model to use', default='glad', choices=get_models())
+    parser.add_argument('--use-elmo', help='use elmo embeddings', action='store_true')
     parser.add_argument('--encoder', help='which encoder to use', default='GLADEncoder', choices=GLAD_ENCODERS)
     parser.add_argument('--epoch', help='max epoch to run for', default=50, type=int)
     parser.add_argument('--demb', help='word embedding size', default=400, type=int)

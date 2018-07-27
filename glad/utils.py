@@ -30,7 +30,10 @@ def get_models():
 
 
 def load_model(model, *args, **kwargs):
-    Model = import_module('models.{}'.format(model)).Model
+    if args.use_elmo:
+        Model = import_module('models.{}'.format(model)).Model_elmo
+    else:
+        Model = import_module('models.{}'.format(model)).Model
     model = Model(*args, **kwargs)
     logging.info('loaded model {}'.format(Model))
     return model
