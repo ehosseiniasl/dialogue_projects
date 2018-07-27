@@ -29,8 +29,8 @@ def get_models():
     return [m.replace('.py', '') for m in os.listdir('models') if not m.startswith('_') and m != 'model']
 
 
-def load_model(model, *args, **kwargs):
-    if args.use_elmo:
+def load_model(model, use_elmo, *args, **kwargs):
+    if use_elmo:
         Model = import_module('models.{}'.format(model)).Model_elmo
     else:
         Model = import_module('models.{}'.format(model)).Model
