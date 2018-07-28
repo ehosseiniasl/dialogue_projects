@@ -45,19 +45,19 @@ def pad(seqs, emb, device, pad=0):
     return emb(padded.to(device)), lens
 
 
-def pad_elmo(seqs, device, pad=0):
-    # lens = [len(s) for s in seqs]
-    # max_len = max(lens)
-    # padded = torch.LongTensor([s + (max_len-l) * [pad] for s, l in zip(seqs, lens)])
+def pad_elmo(seqs, device, pad=0, slot=False):
     if len(seqs) == 0:
         seqs = [['.']]
-    lens = [len(s) for s in seqs]
-    max_lens = max(lens)
-    padded = [p + (max_lens-l) * ['.'] for p, l in zip(seqs, lens)]
+    if slot:
+        lens = [1] * len(seqs[0])
+        max_lens = 1
+        padded = [[p] for p in seqs[0]]
+    else:
+        lens = [len(s) for s in seqs]
+        max_lens = max(lens)
+        padded = [p + (max_lens-l) * ['.'] for p, l in zip(seqs, lens)]
     embeddings = emb_elmo(batch_to_ids(padded))
-    #embeddings_tensor = torch.stack(embeddings['elmo_representations'][0], dim=0).to(device)
     embeddings_tensor = embeddings['elmo_representations'][0].to(device)
-    # return emb(padded.to(device)), lens
     return embeddings_tensor, lens
 
 
@@ -659,9 +659,9 @@ class Model(nn.Module):
     def forward(self, batch):
         # convert to variables and look up embeddings
         eos = self.vocab.word2index('<eos>')
+        ontology = {s: pad(v, self.emb_fixed, self.device, pad=eos) for s, v in self.ontology.num.items()}
         utterance, utterance_len = pad([e.num['transcript'] for e in batch], self.emb_fixed, self.device, pad=eos)
         acts = [pad(e.num['system_acts'], self.emb_fixed, self.device, pad=eos) for e in batch]
-        ontology = {s: pad(v, self.emb_fixed, self.device, pad=eos) for s, v in self.ontology.num.items()}
         ys = {}
         for s in self.ontology.slots:
             # for each slot, compute the scores for each value
@@ -686,6 +686,7 @@ class Model(nn.Module):
                     c_val = c_val.squeeze(0)
                 q_utt, _ = attend(H_utt, c_val.unsqueeze(0).expand(len(batch), *c_val.size()), lens=utterance_len)
                 q_utts.append(q_utt)
+            ipdb.set_trace()
             y_utts = self.utt_scorer(torch.stack(q_utts, dim=1)).squeeze(2)
 
             # compute the previous action score
@@ -701,7 +702,6 @@ class Model(nn.Module):
             else:
                 y_acts = torch.cat(q_acts, dim=0).mm(C_vals.transpose(0, 1))
 
-            ipdb.set_trace()
             # combine the scores
             ys[s] = F.sigmoid(y_utts + self.score_weight * y_acts)
 
@@ -910,7 +910,7 @@ class Model_elmo(nn.Module):
     def forward(self, batch):
         # convert to variables and look up embeddings
         eos = self.vocab.word2index('<eos>')
-        ontology = {s: pad_elmo([v], self.device, pad=eos) for s, v in self.ontology.values.items()}
+        ontology = {s: pad_elmo([v], self.device, pad=eos, slot=True) for s, v in self.ontology.values.items()}
         utterance, utterance_len = pad_elmo([e.transcript for e in batch], self.device, pad=eos)
         acts = [pad_elmo(e.system_acts, self.device, pad=eos) for e in batch]
         ys = {}
@@ -939,6 +939,7 @@ class Model_elmo(nn.Module):
                     c_val = c_val.squeeze(0)
                 q_utt, _ = attend(H_utt, c_val.unsqueeze(0).expand(len(batch), *c_val.size()), lens=utterance_len)
                 q_utts.append(q_utt)
+            #ipdb.set_trace()
             y_utts = self.utt_scorer(torch.stack(q_utts, dim=1)).squeeze(2)
 
             # compute the previous action score
@@ -955,7 +956,6 @@ class Model_elmo(nn.Module):
             else:
                 y_acts = torch.cat(q_acts, dim=0).mm(C_vals.transpose(0, 1))
 
-            ipdb.set_trace()
             # combine the scores
             ys[s] = F.sigmoid(y_utts + self.score_weight * y_acts)
 
@@ -968,7 +968,6 @@ class Model_elmo(nn.Module):
             labels = {s: torch.Tensor(m).to(self.device) for s, m in labels.items()}
 
             loss = 0
-            ipdb.set_trace()
             for s in self.ontology.slots:
                 loss += F.binary_cross_entropy(ys[s], labels[s])
         else:
