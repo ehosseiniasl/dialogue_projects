@@ -686,7 +686,6 @@ class Model(nn.Module):
                     c_val = c_val.squeeze(0)
                 q_utt, _ = attend(H_utt, c_val.unsqueeze(0).expand(len(batch), *c_val.size()), lens=utterance_len)
                 q_utts.append(q_utt)
-            ipdb.set_trace()
             y_utts = self.utt_scorer(torch.stack(q_utts, dim=1)).squeeze(2)
 
             # compute the previous action score
@@ -722,6 +721,7 @@ class Model(nn.Module):
 
     def get_train_logger(self):
         logger = logging.getLogger('train-{}'.format(self.__class__.__name__))
+        logger.setLevel(logging.INFO)
         formatter = logging.Formatter('%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s')
         file_handler = logging.FileHandler(os.path.join(self.args.dout, 'train.log'))
         file_handler.setFormatter(formatter)
