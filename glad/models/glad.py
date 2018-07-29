@@ -976,6 +976,7 @@ class Model_elmo(nn.Module):
 
     def get_train_logger(self):
         logger = logging.getLogger('train-{}'.format(self.__class__.__name__))
+        logger.setLevel(logging.INFO)
         formatter = logging.Formatter('%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s')
         file_handler = logging.FileHandler(os.path.join(self.args.dout, 'train.log'))
         file_handler.setFormatter(formatter)
