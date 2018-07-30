@@ -15,7 +15,8 @@ GLAD_ENCODERS = ['GLADEncoder', 'GLADEncoder_global_v1', 'GLADEncoder_global_v2'
                  'GLADEncoder_global_local_v1', 'GLADEncoder_global_local_v2',
                  'GLADEncoder_global_no_rnn_v1', 'GLADEncoder_global_no_rnn_v2',
                  'GLADEncoder_global_local_no_rnn_v1', 'GLADEncoder_global_local_no_rnn_v2',
-                 'GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2']
+                 'GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2',
+                 'GLADEncoder_elmo']
 
 from allennlp.modules.elmo import Elmo, batch_to_ids
 
@@ -270,6 +271,39 @@ class GLADEncoder(nn.Module):
         beta = self.beta(slot)
         local_h = run_rnn(local_rnn, x, x_len)
         global_h = run_rnn(self.global_rnn, x, x_len)
+        h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        #ipdb.set_trace()
+        return h, c
+
+
+class GLADEncoder_elmo(nn.Module):
+    """
+    the GLAD encoder described in https://arxiv.org/abs/1805.09655.
+    """
+
+    def __init__(self, din, dhid, slots, dropout=None):
+        super().__init__()
+        self.dropout = dropout or {}
+        self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
+        self.global_selfattn = SelfAttention(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
+        for s in slots:
+            setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
+            setattr(self, '{}_selfattn'.format(s), SelfAttention(din, dropout=self.dropout.get('selfattn', 0.)))
+        self.slots = slots
+        self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
+        self.elmo_linear = nn.Linear(1024, din)
+        nn.init.uniform_(self.beta_raw, -0.01, 0.01)
+
+    def beta(self, slot):
+        return F.sigmoid(self.beta_raw[self.slots.index(slot)])
+
+    def forward(self, x, x_len, slot, default_dropout=0.2):
+        local_rnn = getattr(self, '{}_rnn'.format(slot))
+        local_selfattn = getattr(self, '{}_selfattn'.format(slot))
+        beta = self.beta(slot)
+        local_h = run_rnn(local_rnn, self.elmo_linear(x), x_len)
+        global_h = run_rnn(self.global_rnn, self.elmo_linear(x), x_len)
         h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
         c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
         #ipdb.set_trace()
