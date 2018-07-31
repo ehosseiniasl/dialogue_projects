@@ -16,7 +16,7 @@ GLAD_ENCODERS = ['GLADEncoder', 'GLADEncoder_global_v1', 'GLADEncoder_global_v2'
                  'GLADEncoder_global_no_rnn_v1', 'GLADEncoder_global_no_rnn_v2',
                  'GLADEncoder_global_local_no_rnn_v1', 'GLADEncoder_global_local_no_rnn_v2',
                  'GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2',
-                 'GLADEncoder_elmo']
+                 'GLADEncoder_elmo_linear']
 
 from allennlp.modules.elmo import Elmo, batch_to_ids
 from allennlp.commands.elmo import ElmoEmbedder
