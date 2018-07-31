@@ -19,12 +19,14 @@ GLAD_ENCODERS = ['GLADEncoder', 'GLADEncoder_global_v1', 'GLADEncoder_global_v2'
                  'GLADEncoder_elmo']
 
 from allennlp.modules.elmo import Elmo, batch_to_ids
+from allennlp.commands.elmo import ElmoEmbedder
 
 options_file = "https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x4096_512_2048cnn_2xhighway/elmo_2x4096_512_2048cnn_2xhighway_options.json"
 weight_file = "https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x4096_512_2048cnn_2xhighway/elmo_2x4096_512_2048cnn_2xhighway_weights.hdf5"
 
 global emb_elmo
-emb_elmo = Elmo(options_file, weight_file, 1, dropout=0.2)
+#emb_elmo = Elmo(options_file, weight_file, 1, dropout=0.2)
+emb_elmo = ElmoEmbedder(cuda_device=torch.cuda.current_device())
 
 def position_encoding_init(n_position, d_pos_vec):
     ''' Init the sinusoid position encoding table '''
@@ -57,9 +59,10 @@ def pad_elmo(seqs, device, pad=0, slot=False):
         lens = [len(s) for s in seqs]
         max_lens = max(lens)
         padded = [p + (max_lens-l) * ['.'] for p, l in zip(seqs, lens)]
-    embeddings = emb_elmo(batch_to_ids(padded))
-    embeddings_tensor = embeddings['elmo_representations'][0].to(device)
-    return embeddings_tensor, lens
+    #embeddings = emb_elmo(batch_to_ids(padded))
+    #embeddings_tensor = embeddings['elmo_representations'][0].to(device)
+    embeddings_tensor = emb_elmo.batch_to_embeddings(padded)[0]
+    return embeddings_tensor[:,0,:,:], lens
 
 
 def run_rnn(rnn, inputs, lens):
@@ -277,7 +280,7 @@ class GLADEncoder(nn.Module):
         return h, c
 
 
-class GLADEncoder_elmo(nn.Module):
+class GLADEncoder_elmo_linear(nn.Module):
     """
     the GLAD encoder described in https://arxiv.org/abs/1805.09655.
     """
@@ -285,15 +288,15 @@ class GLADEncoder_elmo(nn.Module):
     def __init__(self, din, dhid, slots, dropout=None):
         super().__init__()
         self.dropout = dropout or {}
-        self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
+        self.global_rnn = nn.LSTM(400, dhid, bidirectional=True, batch_first=True)
         self.global_selfattn = SelfAttention(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
         for s in slots:
-            setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
-            setattr(self, '{}_selfattn'.format(s), SelfAttention(din, dropout=self.dropout.get('selfattn', 0.)))
+            setattr(self, '{}_rnn'.format(s), nn.LSTM(400, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
+            setattr(self, '{}_selfattn'.format(s), SelfAttention(400, dropout=self.dropout.get('selfattn', 0.)))
         self.slots = slots
         self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
-        self.elmo_linear = nn.Linear(1024, din)
         nn.init.uniform_(self.beta_raw, -0.01, 0.01)
+        self.elmo_linear = nn.Linear(1024, 400)
 
     def beta(self, slot):
         return F.sigmoid(self.beta_raw[self.slots.index(slot)])
@@ -302,11 +305,16 @@ class GLADEncoder_elmo(nn.Module):
         local_rnn = getattr(self, '{}_rnn'.format(slot))
         local_selfattn = getattr(self, '{}_selfattn'.format(slot))
         beta = self.beta(slot)
-        local_h = run_rnn(local_rnn, self.elmo_linear(x), x_len)
-        global_h = run_rnn(self.global_rnn, self.elmo_linear(x), x_len)
+        if x.ndimension() == 3:
+            b, c, d = x.shape
+            local_h = run_rnn(local_rnn, self.elmo_linear(x.contiguous().view(-1, 1024)).view(b, c, 400), x_len)
+            global_h = run_rnn(self.global_rnn, self.elmo_linear(x.contiguous().view(-1, 1024)).view(b, c, 400), x_len)
+        else:
+            local_h = run_rnn(local_rnn, self.elmo_linear(x), x_len)
+            global_h = run_rnn(self.global_rnn, self.elmo_linear(x), x_len)
+
         h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
         c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
-        #ipdb.set_trace()
         return h, c
 
 
@@ -692,6 +700,7 @@ class Model(nn.Module):
 
     def forward(self, batch):
         # convert to variables and look up embeddings
+        ipdb.set_trace()
         eos = self.vocab.word2index('<eos>')
         ontology = {s: pad(v, self.emb_fixed, self.device, pad=eos) for s, v in self.ontology.num.items()}
         utterance, utterance_len = pad([e.num['transcript'] for e in batch], self.emb_fixed, self.device, pad=eos)
@@ -944,9 +953,9 @@ class Model_elmo(nn.Module):
     def forward(self, batch):
         # convert to variables and look up embeddings
         eos = self.vocab.word2index('<eos>')
+        acts = [pad_elmo(e.system_acts, self.device, pad=eos) for e in batch]
         ontology = {s: pad_elmo([v], self.device, pad=eos, slot=True) for s, v in self.ontology.values.items()}
         utterance, utterance_len = pad_elmo([e.transcript for e in batch], self.device, pad=eos)
-        acts = [pad_elmo(e.system_acts, self.device, pad=eos) for e in batch]
         ys = {}
         for s in self.ontology.slots:
             # for each slot, compute the scores for each value
@@ -960,8 +969,8 @@ class Model_elmo(nn.Module):
                 _, C_acts = list(zip(*[self.act_encoder(a, a_len, slot=s, slot_emb=s_emb) for a, a_len in acts]))
                 _, C_vals = self.ont_encoder(ontology[s][0], ontology[s][1], slot=s, slot_emb=s_emb)
             else:
-                H_utt, c_utt = self.utt_encoder(utterance, utterance_len, slot=s)
                 _, C_acts = list(zip(*[self.act_encoder(a, a_len, slot=s) for a, a_len in acts]))
+                H_utt, c_utt = self.utt_encoder(utterance, utterance_len, slot=s)
                 _, C_vals = self.ont_encoder(ontology[s][0], ontology[s][1], slot=s)
 
             # compute the utterance score
@@ -973,7 +982,6 @@ class Model_elmo(nn.Module):
                     c_val = c_val.squeeze(0)
                 q_utt, _ = attend(H_utt, c_val.unsqueeze(0).expand(len(batch), *c_val.size()), lens=utterance_len)
                 q_utts.append(q_utt)
-            #ipdb.set_trace()
             y_utts = self.utt_scorer(torch.stack(q_utts, dim=1)).squeeze(2)
 
             # compute the previous action score
