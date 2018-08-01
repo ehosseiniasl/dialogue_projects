@@ -14,6 +14,7 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', type=int, help='gpu to use', default=None)
     parser.add_argument('--fout', help='optional save file to store the predictions')
     parser.add_argument('--encoder', help='which encoder to use', default='GLADEncoder', choices=GLAD_ENCODERS)
+    parser.add_argument('--use_elmo', help='use elmo embeddings', action='store_true')
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -27,7 +28,7 @@ if __name__ == '__main__':
 
     dataset, ontology, vocab, Eword = load_dataset()
 
-    model = load_model(args_save.model, args_save, ontology, vocab)
+    model = load_model(args_save.model, args.use_elmo, args_save, ontology, vocab)
     model.load_best_save(directory=args.dsave)
     if args.gpu is not None:
         model.cuda(args.gpu)
