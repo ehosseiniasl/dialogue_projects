@@ -17,7 +17,8 @@ GLAD_ENCODERS = ['GLADEncoder', 'GLADEncoder_global_v1', 'GLADEncoder_global_v2'
                  'GLADEncoder_global_local_no_rnn_v1', 'GLADEncoder_global_local_no_rnn_v2',
                  'GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2',
                  'GLADEncoder_elmo_linear', 'GLADEncoder_global_conv_conditioned_v1',
-                 'GLADEncoder_global_conv_conditioned_pos_v1', 'GLADEncoder_conv']
+                 'GLADEncoder_global_conv_conditioned_pos_v1', 'GLADEncoder_conv',
+                 'GLADEncoder_global_no_rnn_conditioned_v3', 'GLADEncoder_global_no_rnn_conditioned_v4']
 
 from allennlp.modules.elmo import Elmo, batch_to_ids
 from allennlp.commands.elmo import ElmoEmbedder
@@ -207,6 +208,53 @@ class SelfAttention_transformer_condition_v1(nn.Module):
         context = input_selfatt
         #context = self.layer_norm(input_v + input_selfatt).sum(dim=1).div(2*seq_len)
         # context = self.layer_norm(input_selfatt).sum(dim=1).div(seq_len)
+        return context
+
+
+class SelfAttention_transformer_condition_v2(nn.Module):
+
+    def __init__(self, dhid, dropout=0.):
+        super().__init__()
+        self.dk = dhid
+        self.dv = dhid
+        #self.query_layer = nn.Linear(dhid, self.dk)
+        #self.key_layer = nn.Linear(dhid, self.dk)
+        #self.value_layer = nn.Linear(dhid, self.dv)
+        self.linear = nn.Linear(2 * dhid, 1)
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(self.dv)
+
+    def forward(self, inp, lens, cond):
+        batch, seq_len, d_feat = inp.size()
+        # input_q = self.query_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dk)
+        # input_k = self.key_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dk)
+        # input_v = self.value_layer(inp.view(-1, d_feat)).view(batch, seq_len, self.dv)
+        # attention = F.softmax(input_q.bmm(input_k.transpose(2, 1)), dim=1).div(np.sqrt(self.dk))
+        concat = torch.cat((cond.unsqueeze(0).expand_as(inp), inp), dim=2)
+        attention = self.linear(concat.view(-1, 800)).view(batch, seq_len, -1)
+        scores = F.softmax(attention, dim=1)
+        #attention = F.softmax(cond.unsqueeze(0).expand_as(inp).bmm(inp.transpose(2, 1))[:, 0, :], dim=1)
+        #input_selfatt = attention.unsqueeze(1).bmm(inp)
+        context = scores.transpose(2, 1).bmm(inp) 
+        #context = self.layer_norm(input_v + input_selfatt).sum(dim=1).div(2*seq_len)
+        # context = self.layer_norm(input_selfatt).sum(dim=1).div(seq_len)
+        return context
+
+
+class SelfAttention_transformer_condition_v3(nn.Module):
+
+    def __init__(self, dhid, dropout=0.):
+        super().__init__()
+        self.conv = nn.Conv1d(2 * dhid, 1, 5, padding=2)
+        #self.dropout = nn.Dropout(dropout)
+        #self.layer_norm = nn.LayerNorm(self.dv)
+
+    def forward(self, inp, lens, cond):
+        batch, seq_len, d_feat = inp.size()
+        concat = torch.cat((cond.unsqueeze(0).expand_as(inp), inp), dim=2)
+        attention = self.conv(concat.transpose(2, 1))
+        scores = F.softmax(attention, dim=2)
+        context = scores.bmm(inp) 
         return context
 
 
@@ -483,6 +531,56 @@ class GLADEncoder_global_no_rnn_conditioned_v1(nn.Module):
         # c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
         c = F.dropout(self.global_selfattn(h, x_len, slot_emb), self.dropout.get('global', default_dropout), self.training) * (1-beta)
         #ipdb.set_trace()
+        return h, c
+
+
+class GLADEncoder_global_no_rnn_conditioned_v3(nn.Module):
+    """
+    the GLAD encoder described in https://arxiv.org/abs/1805.09655.
+    """
+
+    def __init__(self, din, dhid, slots, dropout=None):
+        super().__init__()
+        self.dropout = dropout or {}
+        self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
+        self.global_selfattn = SelfAttention_transformer_condition_v2(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
+        self.slots = slots
+        self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
+        nn.init.uniform_(self.beta_raw, -0.01, 0.01)
+
+    def beta(self, slot):
+        return F.sigmoid(self.beta_raw[self.slots.index(slot)])
+
+    def forward(self, x, x_len, slot, slot_emb, default_dropout=0.2):
+        beta = self.beta(slot)
+        global_h = run_rnn(self.global_rnn, x, x_len)
+        h = F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        c = F.dropout(self.global_selfattn(h, x_len, slot_emb), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        return h, c
+
+
+class GLADEncoder_global_no_rnn_conditioned_v4(nn.Module):
+    """
+    the GLAD encoder described in https://arxiv.org/abs/1805.09655.
+    """
+
+    def __init__(self, din, dhid, slots, dropout=None):
+        super().__init__()
+        self.dropout = dropout or {}
+        self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
+        self.global_selfattn = SelfAttention_transformer_condition_v3(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
+        self.slots = slots
+        self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
+        nn.init.uniform_(self.beta_raw, -0.01, 0.01)
+
+    def beta(self, slot):
+        return F.sigmoid(self.beta_raw[self.slots.index(slot)])
+
+    def forward(self, x, x_len, slot, slot_emb, default_dropout=0.2):
+        beta = self.beta(slot)
+        global_h = run_rnn(self.global_rnn, x, x_len)
+        h = F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        c = F.dropout(self.global_selfattn(h, x_len, slot_emb), self.dropout.get('global', default_dropout), self.training) * (1-beta)
         return h, c
 
 
@@ -923,7 +1021,7 @@ class Model(nn.Module):
             s_words = s.split()
             s_new = s_words[0]
             s_emb = self.emb_fixed(torch.cuda.LongTensor([self.vocab.word2index(s_new)]))
-            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_v1', 'GLADEncoder_global_conv_conditioned_pos_v1']:
+            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_v1', 'GLADEncoder_global_conv_conditioned_pos_v1', 'GLADEncoder_global_no_rnn_conditioned_v3', 'GLADEncoder_global_no_rnn_conditioned_v4']:
                 H_utt, c_utt = self.utt_encoder(utterance, utterance_len, slot=s, slot_emb=s_emb)
                 _, C_acts = list(zip(*[self.act_encoder(a, a_len, slot=s, slot_emb=s_emb) for a, a_len in acts]))
                 _, C_vals = self.ont_encoder(ontology[s][0], ontology[s][1], slot=s, slot_emb=s_emb)
@@ -936,7 +1034,7 @@ class Model(nn.Module):
             y_utts = []
             q_utts = []
             for c_val in C_vals:
-                if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_pos_v1']:
+                if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_pos_v1', 'GLADEncoder_global_no_rnn_conditioned_v3', 'GLADEncoder_global_no_rnn_conditioned_v4']:
                     c_val = c_val.squeeze(0)
                 q_utt, _ = attend(H_utt, c_val.unsqueeze(0).expand(len(batch), *c_val.size()), lens=utterance_len)
                 q_utts.append(q_utt)
@@ -950,7 +1048,7 @@ class Model(nn.Module):
                 q_act, _ = attend(C_act.unsqueeze(0), c_utt[i].unsqueeze(0), lens=[C_act.size(0)])
                 q_acts.append(q_act)
             
-            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_v1', 'GLADEncoder_global_conv_conditioned_pos_v1']:
+            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_v1', 'GLADEncoder_global_conv_conditioned_pos_v1', 'GLADEncoder_global_no_rnn_conditioned_v3', 'GLADEncoder_global_no_rnn_conditioned_v4']:
                 y_acts = torch.cat(q_acts, dim=0).squeeze().mm(C_vals.squeeze().transpose(0, 1))
             else:
                 y_acts = torch.cat(q_acts, dim=0).mm(C_vals.transpose(0, 1))
