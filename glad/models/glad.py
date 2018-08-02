@@ -102,7 +102,10 @@ def attend(seq, cond, lens):
     """
     attend over the sequences `seq` using the condition `cond`.
     """
-    scores = cond.unsqueeze(1).expand_as(seq).mul(seq).sum(2)
+    if cond.ndimension() < 3:
+        scores = cond.unsqueeze(1).expand_as(seq).mul(seq).sum(2)
+    else:
+        scores = cond.expand_as(seq).mul(seq).sum(2)
     max_len = max(lens)
     for i, l in enumerate(lens):
         if l < max_len:
@@ -416,7 +419,7 @@ class GLADEncoder_global_conv_conditioned_v1(nn.Module):
         super().__init__()
         self.dropout = dropout or {}
         # self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
-        self.global_conv = nn.Conv1d(din, dhid, 5)
+        self.global_conv = nn.Conv1d(din, 2 * dhid, 5, padding=2)
         self.global_selfattn = SelfAttention_transformer_condition_v1(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
         # for s in slots:
             # setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
@@ -436,7 +439,7 @@ class GLADEncoder_global_conv_conditioned_v1(nn.Module):
         #global_h = x
         # local_h = run_rnn(local_rnn, x, x_len)
         # global_h = run_rnn(self.global_rnn, x, x_len)
-        global_h = self.global_conv(x)
+        global_h = self.global_conv(x.permute(0, 2, 1)).permute(0,2,1)
         # h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
         h = F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
         # c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
@@ -755,7 +758,6 @@ class Model(nn.Module):
 
     def forward(self, batch):
         # convert to variables and look up embeddings
-        ipdb.set_trace()
         eos = self.vocab.word2index('<eos>')
         ontology = {s: pad(v, self.emb_fixed, self.device, pad=eos) for s, v in self.ontology.num.items()}
         utterance, utterance_len = pad([e.num['transcript'] for e in batch], self.emb_fixed, self.device, pad=eos)
@@ -767,7 +769,7 @@ class Model(nn.Module):
             s_words = s.split()
             s_new = s_words[0]
             s_emb = self.emb_fixed(torch.cuda.LongTensor([self.vocab.word2index(s_new)]))
-            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2']:
+            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_v1']:
                 H_utt, c_utt = self.utt_encoder(utterance, utterance_len, slot=s, slot_emb=s_emb)
                 _, C_acts = list(zip(*[self.act_encoder(a, a_len, slot=s, slot_emb=s_emb) for a, a_len in acts]))
                 _, C_vals = self.ont_encoder(ontology[s][0], ontology[s][1], slot=s, slot_emb=s_emb)
@@ -794,7 +796,7 @@ class Model(nn.Module):
                 q_act, _ = attend(C_act.unsqueeze(0), c_utt[i].unsqueeze(0), lens=[C_act.size(0)])
                 q_acts.append(q_act)
             
-            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2']:
+            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_v1']:
                 y_acts = torch.cat(q_acts, dim=0).squeeze().mm(C_vals.squeeze().transpose(0, 1))
             else:
                 y_acts = torch.cat(q_acts, dim=0).mm(C_vals.transpose(0, 1))
