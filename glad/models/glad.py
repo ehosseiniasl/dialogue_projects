@@ -184,7 +184,6 @@ class SelfAttention_transformer_v3(nn.Module):
         return input_selfatt, context
 
 
-
 class SelfAttention_transformer_condition_v1(nn.Module):
 
     def __init__(self, dhid, dropout=0.):
@@ -337,6 +336,46 @@ class GLADEncoder_conv(nn.Module):
         return h, c
 
 
+class GLADEncoder_conv_pos(nn.Module):
+    """
+    the GLAD encoder described in https://arxiv.org/abs/1805.09655.
+    """
+
+    def __init__(self, din, dhid, slots, dropout=None):
+        super().__init__()
+        self.dropout = dropout or {}
+        # self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
+        self.global_conv = nn.Conv1d(2 * din, 2 * dhid, 5, padding=2)
+        self.global_selfattn = SelfAttention(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
+        for s in slots:
+            # setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
+            setattr(self, '{}_conv'.format(s), nn.Conv1d(din, 2 * dhid, 5, padding=2))
+            setattr(self, '{}_selfattn'.format(s), SelfAttention(din, dropout=self.dropout.get('selfattn', 0.)))
+        self.slots = slots
+        self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
+        nn.init.uniform_(self.beta_raw, -0.01, 0.01)
+
+    def beta(self, slot):
+        return F.sigmoid(self.beta_raw[self.slots.index(slot)])
+
+    def forward(self, x, x_len, slot, default_dropout=0.2):
+        batch, seq_len, d_feat = x.size()
+        x_pos = position_encoding_init(seq_len, d_feat)
+        x_new = torch.cat((x, x_pos.unsqueeze(0).expand_as(x)), dim=2)
+
+        local_conv = getattr(self, '{}_conv'.format(slot))
+        local_selfattn = getattr(self, '{}_selfattn'.format(slot))
+        beta = self.beta(slot)
+        # local_h = run_rnn(local_rnn, x, x_len)
+        # global_h = run_rnn(self.global_rnn, x, x_len)
+        local_h = local_conv(x_new.permute(0, 2, 1)).permute(0, 2, 1)
+        global_h = self.global_conv(x_new.permute(0, 2, 1)).permute(0, 2, 1)
+        h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        #ipdb.set_trace()
+        return h, c
+
+
 class GLADEncoder_elmo_linear(nn.Module):
     """
     the GLAD encoder described in https://arxiv.org/abs/1805.09655.
@@ -457,6 +496,43 @@ class GLADEncoder_global_conv_conditioned_v1(nn.Module):
         self.dropout = dropout or {}
         # self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
         self.global_conv = nn.Conv1d(din, 2 * dhid, 5, padding=2)
+        self.global_selfattn = SelfAttention_transformer_condition_v1(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
+        # for s in slots:
+            # setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
+            # setattr(self, '{}_selfattn'.format(s), SelfAttention(din, dropout=self.dropout.get('selfattn', 0.)))
+        self.slots = slots
+        self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
+        nn.init.uniform_(self.beta_raw, -0.01, 0.01)
+
+    def beta(self, slot):
+        return F.sigmoid(self.beta_raw[self.slots.index(slot)])
+
+    def forward(self, x, x_len, slot, slot_emb, default_dropout=0.2):
+        #local_rnn = getattr(self, '{}_rnn'.format(slot))
+        #local_selfattn = getattr(self, '{}_selfattn'.format(slot))
+        beta = self.beta(slot)
+        # local_h = x
+        #global_h = x
+        # local_h = run_rnn(local_rnn, x, x_len)
+        # global_h = run_rnn(self.global_rnn, x, x_len)
+        global_h = self.global_conv(x.permute(0, 2, 1)).permute(0,2,1)
+        # h = F.dropout(local_h, self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        h = F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        # c = F.dropout(local_selfattn(h, x_len), self.dropout.get('local', default_dropout), self.training) * beta + F.dropout(self.global_selfattn(h, x_len), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        c = F.dropout(self.global_selfattn(h, x_len, slot_emb), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        #ipdb.set_trace()
+        return h, c
+
+class GLADEncoder_global_conv2d_conditioned_v1(nn.Module):
+    """
+    the GLAD encoder described in https://arxiv.org/abs/1805.09655.
+    """
+
+    def __init__(self, din, dhid, slots, dropout=None):
+        super().__init__()
+        self.dropout = dropout or {}
+        # self.global_rnn = nn.LSTM(din, dhid, bidirectional=True, batch_first=True)
+        self.global_conv = nn.Conv2d(1, 1, 5, padding=2)
         self.global_selfattn = SelfAttention_transformer_condition_v1(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
         # for s in slots:
             # setattr(self, '{}_rnn'.format(s), nn.LSTM(din, dhid, bidirectional=True, batch_first=True, dropout=self.dropout.get('rnn', 0.)))
