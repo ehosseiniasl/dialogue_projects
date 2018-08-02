@@ -18,7 +18,7 @@ GLAD_ENCODERS = ['GLADEncoder', 'GLADEncoder_global_v1', 'GLADEncoder_global_v2'
                  'GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2',
                  'GLADEncoder_elmo_linear', 'GLADEncoder_global_conv_conditioned_v1',
                  'GLADEncoder_global_conv_conditioned_pos_v1', 'GLADEncoder_conv',
-                 'GLADEncoder_global_no_rnn_conditioned_v3', 'GLADEncoder_global_no_rnn_conditioned_v4']
+                 'GLADEncoder_global_no_rnn_conditioned_v3', 'GLADEncoder_global_no_rnn_conditioned_v4', 'GLADEncoder_global_no_rnn_conditioned_v5']
 
 from allennlp.modules.elmo import Elmo, batch_to_ids
 from allennlp.commands.elmo import ElmoEmbedder
@@ -584,6 +584,32 @@ class GLADEncoder_global_no_rnn_conditioned_v4(nn.Module):
         return h, c
 
 
+class GLADEncoder_global_no_rnn_conditioned_v5(nn.Module):
+    """
+    the GLAD encoder described in https://arxiv.org/abs/1805.09655.
+    """
+
+    def __init__(self, din, dhid, slots, dropout=None):
+        super().__init__()
+        self.dropout = dropout or {}
+        self.global_rnn = nn.LSTM(2 * din, dhid, bidirectional=True, batch_first=True)
+        self.global_selfattn = SelfAttention_transformer_condition_v3(2 * dhid, dropout=self.dropout.get('selfattn', 0.))
+        self.slots = slots
+        self.beta_raw = nn.Parameter(torch.Tensor(len(slots)))
+        nn.init.uniform_(self.beta_raw, -0.01, 0.01)
+
+    def beta(self, slot):
+        return F.sigmoid(self.beta_raw[self.slots.index(slot)])
+
+    def forward(self, x, x_len, slot, slot_emb, default_dropout=0.2):
+        beta = self.beta(slot)
+        x_new = torch.cat((slot_emb.unsqueeze(0).expand_as(x), x), dim=2)
+        global_h = run_rnn(self.global_rnn, x_new, x_len)
+        h = F.dropout(global_h, self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        c = F.dropout(self.global_selfattn(h, x_len, slot_emb), self.dropout.get('global', default_dropout), self.training) * (1-beta)
+        return h, c
+
+
 class GLADEncoder_global_conv_conditioned_v1(nn.Module):
     """
     the GLAD encoder described in https://arxiv.org/abs/1805.09655.
@@ -1021,7 +1047,7 @@ class Model(nn.Module):
             s_words = s.split()
             s_new = s_words[0]
             s_emb = self.emb_fixed(torch.cuda.LongTensor([self.vocab.word2index(s_new)]))
-            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_v1', 'GLADEncoder_global_conv_conditioned_pos_v1', 'GLADEncoder_global_no_rnn_conditioned_v3', 'GLADEncoder_global_no_rnn_conditioned_v4']:
+            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_v1', 'GLADEncoder_global_conv_conditioned_pos_v1', 'GLADEncoder_global_no_rnn_conditioned_v3', 'GLADEncoder_global_no_rnn_conditioned_v4', 'GLADEncoder_global_no_rnn_conditioned_v5']:
                 H_utt, c_utt = self.utt_encoder(utterance, utterance_len, slot=s, slot_emb=s_emb)
                 _, C_acts = list(zip(*[self.act_encoder(a, a_len, slot=s, slot_emb=s_emb) for a, a_len in acts]))
                 _, C_vals = self.ont_encoder(ontology[s][0], ontology[s][1], slot=s, slot_emb=s_emb)
@@ -1034,7 +1060,7 @@ class Model(nn.Module):
             y_utts = []
             q_utts = []
             for c_val in C_vals:
-                if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_pos_v1', 'GLADEncoder_global_no_rnn_conditioned_v3', 'GLADEncoder_global_no_rnn_conditioned_v4']:
+                if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_pos_v1', 'GLADEncoder_global_no_rnn_conditioned_v3', 'GLADEncoder_global_no_rnn_conditioned_v4', 'GLADEncoder_global_no_rnn_conditioned_v5']:
                     c_val = c_val.squeeze(0)
                 q_utt, _ = attend(H_utt, c_val.unsqueeze(0).expand(len(batch), *c_val.size()), lens=utterance_len)
                 q_utts.append(q_utt)
@@ -1048,7 +1074,7 @@ class Model(nn.Module):
                 q_act, _ = attend(C_act.unsqueeze(0), c_utt[i].unsqueeze(0), lens=[C_act.size(0)])
                 q_acts.append(q_act)
             
-            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_v1', 'GLADEncoder_global_conv_conditioned_pos_v1', 'GLADEncoder_global_no_rnn_conditioned_v3', 'GLADEncoder_global_no_rnn_conditioned_v4']:
+            if self.encoder.__name__ in ['GLADEncoder_global_no_rnn_conditioned_v1', 'GLADEncoder_global_no_rnn_conditioned_v2', 'GLADEncoder_global_conv_conditioned_v1', 'GLADEncoder_global_conv_conditioned_pos_v1', 'GLADEncoder_global_no_rnn_conditioned_v3', 'GLADEncoder_global_no_rnn_conditioned_v4', 'GLADEncoder_global_no_rnn_conditioned_v5']:
                 y_acts = torch.cat(q_acts, dim=0).squeeze().mm(C_vals.squeeze().transpose(0, 1))
             else:
                 y_acts = torch.cat(q_acts, dim=0).mm(C_vals.transpose(0, 1))
