@@ -62,7 +62,24 @@ def pad_elmo(seqs, device, pad=0, slot=False):
     #embeddings = emb_elmo(batch_to_ids(padded))
     #embeddings_tensor = embeddings['elmo_representations'][0].to(device)
     embeddings_tensor = emb_elmo.batch_to_embeddings(padded)[0]
-    return embeddings_tensor[:,0,:,:], lens
+    return embeddings_tensor[:,2,:,:], lens
+
+
+def pad_elmo_v1(seqs, device, pad=0, slot=False):
+    if len(seqs) == 0:
+        seqs = [['.']]
+    if slot:
+        lens = [1] * len(seqs[0])
+        max_lens = 1
+        padded = [[p] for p in seqs[0]]
+    else:
+        lens = [len(s) for s in seqs]
+        max_lens = max(lens)
+        padded = [p + (max_lens-l) * ['.'] for p, l in zip(seqs, lens)]
+    #embeddings = emb_elmo(batch_to_ids(padded))
+    #embeddings_tensor = embeddings['elmo_representations'][0].to(device)
+    embeddings_tensor = emb_elmo.batch_to_embeddings(padded)[0]
+    return embeddings_tensor.sum(1), lens
 
 
 def run_rnn(rnn, inputs, lens):
